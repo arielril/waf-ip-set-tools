@@ -25,13 +25,13 @@ Usage of waf-ip-set-tools:
 ### Add a list of IP CIDR to an IP Set
 
 ```sh
-waf-ip-set-tools -profile aws-profile -region us-east-1 -id ipset-id \
+$ waf-ip-set-tools -profile aws-profile -region us-east-1 -id ipset-id \
   -name 'ipset-name' -action add-ip -data '187.114.175.159/32,191.5.67.33/32'
 ```
 
 ### Remove a list of IP CIDR from an IP Set
 
 ```sh
-waf-ip-set-tools -profile aws-profile -region us-east-1 -id ipset-id \
+$ waf-ip-set-tools -profile aws-profile -region us-east-1 -id ipset-id \
   -name 'ipset-name' -action remove-ip -data '187.114.175.159/32,191.5.67.33/32'
 ```
