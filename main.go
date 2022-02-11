@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"strings"
 
@@ -34,11 +35,12 @@ type ExecuteOpts struct {
 var logger = log.GetInstance()
 
 const (
-	ActionAddIP    = "add-ip"
-	ActionRemoveIP = "remove-ip"
+	ActionAddIP       = "add-ip"
+	ActionRemoveIP    = "remove-ip"
+	ActionClearIPList = "clear"
 )
 
-var validActions = []string{ActionAddIP, ActionRemoveIP}
+var validActions = []string{ActionAddIP, ActionRemoveIP, ActionClearIPList}
 
 func main() {
 
@@ -63,6 +65,9 @@ func main() {
 	var data string
 	flag.StringVar(&data, "data", "", "IP CIDR list, separated with commas (','). Ex: \"cidr_1,cidr_2,cidr_3\"")
 
+	var fileName string
+	flag.StringVar(&fileName, "file", "", "File with a list of IP CIDR")
+
 	flag.Parse()
 
 	opts := ExecuteOpts{
@@ -85,8 +90,8 @@ func main() {
 
 	logger.Info().Msgf("connecting to AWS [%v] [%v] - action (%v)", profile, region, action)
 
-	if data == "" {
-		logger.Info().Msgf("no data informed")
+	if action != ActionClearIPList && data == "" && fileName == "" {
+		logger.Info().Msgf("no IP list informed")
 		return
 	}
 
@@ -95,10 +100,25 @@ func main() {
 		return
 	}
 
+	ipList := make([]string, 0)
+
+	if data != "" {
+		ipList = removeInvalidData(data)
+	} else if fileName != "" {
+		logger.Info().Msgf("loading IP list from file [%v]", fileName)
+		data, ok := getIPListFromFile(fileName)
+		if !ok {
+			return
+		}
+		ipList = data
+	}
+
 	if opts.Action == ActionAddIP {
-		addIP(awsCfg, opts, data)
+		addIP(awsCfg, opts, ipList)
 	} else if action == ActionRemoveIP {
-		removeIP(awsCfg, opts, data)
+		removeIP(awsCfg, opts, ipList)
+	} else if action == ActionClearIPList {
+		clearIPList(awsCfg, opts)
 	}
 }
 
@@ -138,8 +158,7 @@ func removeInvalidData(data string) []string {
 	result := make([]string, 0)
 
 	for _, d := range strings.Split(data, ",") {
-		_, _, err := net.ParseCIDR(d)
-		if err == nil {
+		if isValidCIDR(d) {
 			result = append(result, d)
 		}
 	}
@@ -147,17 +166,26 @@ func removeInvalidData(data string) []string {
 	return result
 }
 
-func addIP(awsCfg aws.Config, opts ExecuteOpts, data string) {
-	ipsToAdd := removeInvalidData(data)
+func isValidCIDR(ip string) bool {
+	_, _, err := net.ParseCIDR(ip)
 
-	if len(ipsToAdd) == 0 {
+	if err != nil {
+		logger.Warning().Msgf("invalid CIDR [%v]", ip)
+		return false
+	}
+
+	return true
+}
+
+func addIP(awsCfg aws.Config, opts ExecuteOpts, ipList []string) {
+	if len(ipList) == 0 {
 		logger.Info().Msg("no IP range to add in the IP Set")
 		return
 	}
 
 	ipSetAddresses := getIPSetAddresses(awsCfg, opts)
 
-	for _, ip := range ipsToAdd {
+	for _, ip := range ipList {
 		if !isIPInList(ip, ipSetAddresses) {
 			ipSetAddresses = append(ipSetAddresses, ip)
 		} else {
@@ -169,15 +197,13 @@ func addIP(awsCfg aws.Config, opts ExecuteOpts, data string) {
 	if ok {
 		logger.Info().Msgf(
 			"successfully added new IP ranges (%v) in IP Set [%v] - %v (%v)",
-			len(ipsToAdd), opts.IPSetInfo.ID, opts.IPSetInfo.Name, opts.IPSetInfo.Scope,
+			len(ipList), opts.IPSetInfo.ID, opts.IPSetInfo.Name, opts.IPSetInfo.Scope,
 		)
 	}
 }
 
-func removeIP(awsCfg aws.Config, opts ExecuteOpts, data string) {
-	ipsToRemove := removeInvalidData(data)
-
-	if len(ipsToRemove) == 0 {
+func removeIP(awsCfg aws.Config, opts ExecuteOpts, ipList []string) {
+	if len(ipList) == 0 {
 		logger.Info().Msgf("no IP ranges to remove from IP set")
 		return
 	}
@@ -186,7 +212,7 @@ func removeIP(awsCfg aws.Config, opts ExecuteOpts, data string) {
 	updatedIPSetAddresses := make([]string, 0)
 
 	for _, ip := range ipSetAddresses {
-		if isIPInList(ip, ipsToRemove) {
+		if isIPInList(ip, ipList) {
 			continue
 		}
 
@@ -197,7 +223,17 @@ func removeIP(awsCfg aws.Config, opts ExecuteOpts, data string) {
 	if ok {
 		logger.Info().Msgf(
 			"successfully removed IP ranges (%v) from IP Set [%v] - %v (%v)",
-			len(ipsToRemove), opts.IPSetInfo.ID, opts.IPSetInfo.Name, opts.IPSetInfo.Scope,
+			len(ipList), opts.IPSetInfo.ID, opts.IPSetInfo.Name, opts.IPSetInfo.Scope,
+		)
+	}
+}
+
+func clearIPList(awsCfg aws.Config, opts ExecuteOpts) {
+	ok := updateIPSetAddressList(awsCfg, opts, make([]string, 0))
+	if ok {
+		logger.Info().Msgf(
+			"cleared IP Set [%v] - %v (%v)",
+			opts.IPSetInfo.ID, opts.IPSetInfo.Name, opts.IPSetInfo.Scope,
 		)
 	}
 }
@@ -284,4 +320,28 @@ func getAWSConfig(opts ExecuteOpts) (aws.Config, bool) {
 	}
 
 	return awsCfg, true
+}
+
+func getIPListFromFile(fileName string) ([]string, bool) {
+	result := make([]string, 0)
+
+	bts, err := ioutil.ReadFile(fileName)
+	if err != nil {
+		logger.Error().Msgf("failed to read file. error: %v", err)
+		return nil, false
+	}
+
+	for _, l := range strings.Split(string(bts), "\n") {
+		if len(l) == 0 {
+			// ignore empty lines
+			continue
+		}
+
+		cidr := strings.TrimSpace(l)
+		if isValidCIDR(cidr) {
+			result = append(result, cidr)
+		}
+	}
+
+	return result, true
 }
