@@ -1,10 +1,11 @@
 # waf-ip-set-tools
+
 Wrapper to use the functionality from AWS WAFv2 via cli
 
 ## Installation
 
 ```sh
-$ go install -v github.com/arielril/waf-ip-set-tools@latest
+go install -v github.com/arielril/waf-ip-set-tools@latest
 ```
 
 ## Usage
@@ -64,4 +65,3 @@ $ waf-ip-set-tools -profile 'aws-profile' -region 'us-east-1' -id 'ipset-id' \
 $ waf-ip-set-tools -profile 'aws-profile' -region 'us-east-1' -id 'ipset-id' \
   -name 'ipset-name' -action 'clear'
 ```
-
